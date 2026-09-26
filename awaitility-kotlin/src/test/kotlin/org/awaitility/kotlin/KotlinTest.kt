@@ -1,0 +1,282 @@
+/*
+ * Copyright 2019 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.awaitility.kotlin
+
+import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.catchThrowable
+import org.awaitility.Awaitility.await
+import org.awaitility.Durations.*
+import org.awaitility.classes.Asynch
+import org.awaitility.classes.FakeRepository
+import org.awaitility.classes.FakeRepositoryImpl
+import org.awaitility.core.ConditionEvaluationListener
+import org.awaitility.core.ConditionTimeoutException
+import org.awaitility.pollinterval.FibonacciPollInterval.fibonacci
+import org.hamcrest.Matchers.*
+import org.junit.Assert.assertEquals
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.ExpectedException
+import java.lang.Thread.sleep
+import java.time.Duration
+import java.util.concurrent.TimeUnit.MILLISECONDS
+import java.util.concurrent.TimeUnit.SECONDS
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.system.measureTimeMillis
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+
+class KotlinTest {
+
+    @Rule
+    @JvmField
+    val exception: ExpectedException = ExpectedException.none()
+
+    private lateinit var asynch: Asynch
+    private lateinit var fakeRepository: FakeRepository
+
+    @Before
+    fun setup() {
+        fakeRepository = FakeRepositoryImpl()
+        asynch = Asynch(fakeRepository)
+    }
+
+    @Test
+    fun booleanCondition() {
+        Asynch(fakeRepository).perform()
+        await().until { fakeRepository.value == 1 }
+    }
+
+    @Test
+    fun forever() {
+        Asynch(fakeRepository).perform()
+        await.forever until { fakeRepository.value == 1 }
+    }
+
+    @Test
+    fun assertionCondition() {
+        Asynch(fakeRepository).perform()
+        await().untilAsserted { assertEquals(1, fakeRepository.value) }
+    }
+
+    @Test
+    fun assertionConditionFailsWithANiceErrorMessage() {
+        exception.expect(ConditionTimeoutException::class.java)
+        exception.expectMessage(startsWith("Assertion condition defined"))
+
+        Asynch(fakeRepository).perform()
+        await().atMost(1, SECONDS).untilAsserted { assertEquals(2, fakeRepository.value) }
+    }
+
+    @Test
+    fun booleanConditionFailsWithANiceErrorMessage() {
+        exception.expect(ConditionTimeoutException::class.java)
+        exception.expectMessage(allOf(startsWith("Condition"), endsWith("was not fulfilled within 1 seconds.")))
+
+        Asynch(fakeRepository).perform()
+        await().atMost(1, SECONDS).until { fakeRepository.value == 2 }
+    }
+
+    @Test
+    fun untilCallToExtensionFn() {
+        Asynch(fakeRepository).perform()
+
+        await().untilCallTo { fakeRepository.value } matches { it == 1 }
+    }
+
+    @Test
+    fun simpleAwaitUntilWithKotlin() {
+        Asynch(fakeRepository).perform()
+
+        await until { fakeRepository.value == 1 }
+    }
+
+    @Test
+    fun usingLotsOfMethodsInDsl() {
+        Asynch(fakeRepository).perform()
+
+        await withAlias "Kotlin Test" ignoreExceptionsInstanceOf
+                IllegalArgumentException::class withPollDelay ONE_HUNDRED_MILLISECONDS withPollInterval
+                fibonacci().with().offset(1).and().unit(MILLISECONDS) atLeast TWO_HUNDRED_MILLISECONDS atMost
+                ONE_MINUTE untilCallTo { fakeRepository.value } matches { it == 1 }
+
+    }
+
+    @Test
+    fun untilAsserted() {
+        Asynch(fakeRepository).perform()
+
+        await withPollInterval ONE_HUNDRED_MILLISECONDS ignoreException IllegalArgumentException::class untilAsserted {
+            assertThat(fakeRepository.value).isEqualTo(1)
+        }
+    }
+
+    @Test
+    fun untilAssertedWithConsumerMatcher() {
+        Asynch(fakeRepository).perform()
+
+        await.untilAsserted(fakeRepository::getValue) {
+            assertThat(it).isEqualTo(1)
+        }
+    }
+
+    @Test
+    fun untilAtomicAssertedWhenReferenceIsNullByDefault() {
+        val atomicReference = AtomicReference<String>()
+        Thread {
+            sleep(500)
+            atomicReference.set("world")
+        }.start()
+
+        await.untilAtomic(atomicReference) { string ->
+            assertThat(string).isEqualTo("world")
+        }
+    }
+
+    @Test
+    fun untilAssertedWithConditionEvaluationListener() {
+        var value = false
+        Asynch(fakeRepository).perform()
+
+        await withPollInterval ONE_HUNDRED_MILLISECONDS ignoreException IllegalArgumentException::class conditionEvaluationListener ConditionEvaluationListener<Unit> { value = true } untilAsserted {
+            assertThat(fakeRepository.value).isEqualTo(1)
+        }
+
+        assertThat(value).isTrue
+    }
+
+    @Test
+    fun untilCallToExtensionFnHasADecentErrorMessage() {
+        Asynch(fakeRepository).perform()
+
+        val throwable = catchThrowable {
+            await() atMost Duration.ofSeconds(1) untilCallTo { fakeRepository.value } matches { it == 2 }
+        }
+
+        assertThat(throwable).isExactlyInstanceOf(ConditionTimeoutException::class.java).hasMessageEndingWith("expected the predicate to return <true> but it returned <false> for input of <1> within 1 seconds.")
+    }
+
+    @Test
+    fun untilNotNull() {
+        val fakeObjectRepository = FakeGenericRepository<Data?>(null)
+        AsynchObject(fakeObjectRepository, Data("Hello")).perform()
+
+        val data = await untilNotNull { fakeObjectRepository.data }
+        assertThat(data.state).isEqualTo("Hello") // No need for "data?.value" since we know it's not null!
+    }
+
+    @Test
+    fun untilNull() {
+        val fakeObjectRepository = FakeGenericRepository<Data?>(Data("Hello"))
+        AsynchObject(fakeObjectRepository, null).perform()
+
+        await untilNull { fakeObjectRepository.data }
+    }
+
+    @Test
+    fun hasWithNullableType() {
+        val fakeObjectRepository = FakeGenericRepository<Data?>(null)
+        AsynchObject(fakeObjectRepository, Data("Hello")).perform()
+
+        val data = await untilCallTo { fakeObjectRepository.data } has {
+            state == "Hello"
+        }
+        assertThat(data.state).isEqualTo("Hello")
+    }
+
+    @Test
+    fun hasWithNonNullableType() {
+        val fakeObjectRepository = FakeGenericRepository(Data("Before"))
+        AsynchObject(fakeObjectRepository, Data("After")).perform()
+
+        val data: Data = await untilCallTo { fakeObjectRepository.data } has {
+            state == "After"
+        }
+        assertThat(data.state).isEqualTo("After")
+    }
+
+    @Test
+    fun atMostWithKotlinDuration() {
+        await() atMost 1.seconds untilNull { null }
+    }
+
+    @Test
+    fun atLeastWithKotlinDuration() {
+        await() atLeast 1.seconds untilNull {
+            Thread.sleep((1.seconds + 500.milliseconds).inWholeMilliseconds)
+            null
+        }
+    }
+
+    @Test
+    fun withPollDelayAndWithPollIntervalWithKotlinDuration() {
+        val ref = AtomicReference("value")
+
+        Thread() {
+            Thread.sleep((1.seconds + 500.milliseconds).inWholeMilliseconds)
+            ref.set(null)
+        }.start()
+
+        val count = AtomicInteger()
+        await() withPollDelay 1.seconds withPollInterval 100.milliseconds untilNull {
+            count.incrementAndGet()
+            ref.get()
+        }
+        // Mathematically we have 100ms in 500ms 5 times,
+        // invocation count should be 5 times -> safe assertion interval of invocation is [4, 6] times
+        assertThat(count).hasValueBetween(4, 6)
+    }
+
+    @Test(timeout = 2000)
+    fun awaitDuringTimeOnCondition() {
+        val duration = measureTimeMillis {
+            await() during ONE_SECOND until { true }
+        }
+
+        assertThat(duration).isGreaterThan(1000)
+    }
+
+    @Test(timeout = 2000)
+    fun awaitDuringTimeOnConditionWithKotlinDuration() {
+        val duration = measureTimeMillis {
+            await() during 1.seconds until { true }
+        }
+
+        assertThat(duration).isGreaterThan(1000)
+    }
+}
+
+class AsynchObject<T>(private val repository: FakeGenericRepository<T>, private val changeTo: T) {
+
+    fun perform() {
+        val thread = Thread(Runnable {
+            try {
+                Thread.sleep(600)
+                repository.data = changeTo
+            } catch (e: InterruptedException) {
+                throw RuntimeException(e)
+            }
+        })
+        thread.start()
+    }
+}
+
+
+data class Data(var state: String)
+data class FakeGenericRepository<T>(var data: T)
