@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: 'ubuntu-latest'
+          arch: arm64
+          java: 11
+          runner: ubuntu-24.04-arm
+          expander_leg: ubuntu-latest--arm64
+    runs-on: '${{ matrix.runner }}'
+    steps:
+    - uses: actions/checkout@main
+    - name: Set up JDK
+      uses: actions/setup-java@main
+      with:
+        java-version: ${{ matrix.java }}
+        distribution: 'zulu'
+        cache: 'maven'
+    - name: Build
+      run: mvn --no-transfer-progress -B clean install ${{ matrix.maven-args }}
+    name: build [${{ matrix.expander_leg }}]
+    timeout-minutes: 150
